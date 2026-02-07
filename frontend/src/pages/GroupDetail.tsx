@@ -68,12 +68,22 @@ const GroupDetail = () => {
         <p className="mt-1 text-sm text-muted-foreground">
           Assignment: {assignment.name}
         </p>
-        <div className="mt-2 flex flex-wrap gap-1.5">
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           {group.members.map((m) => (
             <Badge key={m} variant="secondary" className="gap-1">
               <Github className="h-3 w-3" />@{m}
             </Badge>
           ))}
+          {group.repoLink && (
+            <a
+              href={group.repoLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+            >
+              <Github className="h-4 w-4" /> Repository
+            </a>
+          )}
         </div>
 
         {/* Activity Timeline */}
