@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { Calendar, Users, UserPlus, Send, Trash2 } from "lucide-react";
+import { Calendar, Users, UserPlus, Send, Trash2, Pencil, Loader2, UserCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -19,9 +21,20 @@ import {
   DialogTrigger,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import TopBar from "@/components/TopBar";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { useBreadcrumbTitles } from "@/contexts/BreadcrumbContext";
 import { getGitHubUser } from "@/lib/api";
 import {
   fetchAssignment,
@@ -29,10 +42,12 @@ import {
   inviteStudent,
   deleteInvite,
   deleteAssignment,
+  updateAssignment,
+  fetchClassrooms,
 } from "@/lib/firestore";
 import { GitHubUserSearch } from "@/components/GitHubUserSearch";
 import { UserAvatarName } from "@/components/UserAvatarName";
-import type { Assignment, InvitedUser } from "@/data/mockData";
+import type { Assignment, Classroom, InvitedUser } from "@/data/mockData";
 import type { GitHubUser } from "@/lib/api";
 
 const statusColor: Record<string, "default" | "secondary" | "destructive"> = {
@@ -51,17 +66,31 @@ const AssignmentDetail = () => {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteQuery, setInviteQuery] = useState("");
   const [inviteLoading, setInviteLoading] = useState(false);
+  const [classroomInviteOpen, setClassroomInviteOpen] = useState(false);
+  const [classrooms, setClassrooms] = useState<Classroom[]>([]);
+  const [classroomInviteLoading, setClassroomInviteLoading] = useState(false);
+  const [editingField, setEditingField] = useState<"name" | "description" | "dueDate" | "maxGroupSize" | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [savingField, setSavingField] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const { getAccessToken } = useAuth();
+  const { setTitles } = useBreadcrumbTitles();
 
   useEffect(() => {
     if (!assignmentId) return;
     setAssignment(undefined);
     getAccessToken().then((token) =>
-      fetchAssignment(token, assignmentId).then((a) =>
-        setAssignment(a ?? null),
-      ),
+      fetchAssignment(token, assignmentId).then((a) => {
+        setAssignment(a ?? null);
+        setTitles(
+          a
+            ? { assignmentName: a.name, assignmentId: a.id }
+            : {},
+        );
+      }),
     );
-  }, [assignmentId]);
+  }, [assignmentId, setTitles]);
 
   useEffect(() => {
     if (!assignmentId) return;
@@ -98,11 +127,13 @@ const AssignmentDetail = () => {
 
   const handleDeleteAssignment = async () => {
     try {
+      setDeleting(true);
       const token = await getAccessToken();
       if (!token || !assignmentId) throw new Error("Not authenticated");
 
       await deleteAssignment(token, assignmentId);
 
+      setDeleteDialogOpen(false);
       toast({
         title: "Assignment deleted",
         description: "The assignment has been deleted.",
@@ -112,6 +143,8 @@ const AssignmentDetail = () => {
       const errorMsg =
         err instanceof Error ? err.message : "Failed to delete assignment";
       toast({ title: "Error", description: errorMsg, variant: "destructive" });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -139,14 +172,13 @@ const AssignmentDetail = () => {
       if (!token) throw new Error("Not authenticated");
 
       const full = await getGitHubUser(user.login);
-      await inviteStudent(token, assignmentId, {
+      await inviteStudent(token, assignmentId!, {
         githubUsername: full.login,
         avatarUrl: full.avatar_url,
         name: full.name,
       });
 
-      // Refetch invited students
-      const updated = await fetchInvitedStudents(token, assignmentId);
+      const updated = await fetchInvitedStudents(token, assignmentId!);
       setInvitedUsers(updated);
 
       setInviteOpen(false);
@@ -171,8 +203,125 @@ const AssignmentDetail = () => {
     setInviteOpen(open);
   };
 
-  const inviteClassroom = () =>
-    toast({ title: "Invitation sent", description: "Invited classroom." });
+  const handleClassroomInviteOpenChange = (open: boolean) => {
+    if (open) {
+      getAccessToken().then((token) => {
+        if (token) fetchClassrooms(token).then(setClassrooms);
+      });
+    }
+    setClassroomInviteOpen(open);
+  };
+
+  const startEdit = (field: "name" | "description" | "dueDate", value: string) => {
+    setEditingField(field);
+    setEditValue(value);
+  };
+
+  const cancelEdit = () => {
+    setEditingField(null);
+    setEditValue("");
+  };
+
+  const saveEdit = async () => {
+    if (!assignmentId || !assignment || editingField === null) return;
+    setSavingField(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Not authenticated");
+      const payload =
+        editingField === "dueDate"
+          ? { dueDate: editValue.trim() }
+          : editingField === "maxGroupSize"
+            ? { maxGroupSize: Math.max(2, parseInt(editValue, 10) || 2) }
+            : editingField === "name"
+              ? { name: editValue.trim() }
+              : { description: editValue.trim() };
+      const updated = await updateAssignment(token, assignmentId, payload);
+      setAssignment(updated);
+      if (editingField === "name") {
+        setTitles({ assignmentName: updated.name, assignmentId: updated.id });
+      }
+      setEditingField(null);
+      setEditValue("");
+      toast({ title: "Saved", description: "Assignment updated." });
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : "Failed to save",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingField(false);
+    }
+  };
+
+  const inviteClassroomStudents = async (classroom: Classroom) => {
+    if (!assignmentId) return;
+    setClassroomInviteLoading(true);
+    const alreadyInvited = new Set(
+      invitedUsers.map((u) => u.githubUsername.toLowerCase()),
+    );
+    let added = 0;
+    let skipped = 0;
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Not authenticated");
+
+      const students = classroom.students ?? [];
+      for (const student of students) {
+        const login = (student.githubUsername || "").trim().toLowerCase();
+        if (!login) continue;
+        if (alreadyInvited.has(login)) {
+          skipped += 1;
+          continue;
+        }
+        try {
+          await inviteStudent(token, assignmentId, {
+            githubUsername: login,
+            avatarUrl: student.avatarUrl,
+            name: student.name,
+          });
+          added += 1;
+          alreadyInvited.add(login);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "";
+          if (msg.toLowerCase().includes("already invited")) {
+            skipped += 1;
+            alreadyInvited.add(login);
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      const updated = await fetchInvitedStudents(token, assignmentId);
+      setInvitedUsers(updated);
+      setClassroomInviteOpen(false);
+
+      if (added === 0 && skipped === 0) {
+        toast({
+          title: "No students to invite",
+          description: `${classroom.name} has no students.`,
+        });
+      } else if (added === 0) {
+        toast({
+          title: "Classroom already invited",
+          description: `All ${skipped} student(s) from ${classroom.name} were already invited.`,
+        });
+      } else {
+        toast({
+          title: "Classroom invited",
+          description: `Added ${added} student(s) from ${classroom.name}${skipped > 0 ? ` (${skipped} already invited, skipped)` : ""}.`,
+        });
+      }
+    } catch (err) {
+      const errorMsg =
+        err instanceof Error ? err.message : "Failed to invite classroom";
+      toast({ title: "Error", description: errorMsg, variant: "destructive" });
+    } finally {
+      setClassroomInviteLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen">
@@ -180,36 +329,188 @@ const AssignmentDetail = () => {
       <main className="mx-auto max-w-4xl px-4 py-8">
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">
-              {assignment.name}
-            </h1>
-            <p className="mt-1 text-muted-foreground">
-              {assignment.description}
-            </p>
+          <div className="min-w-0 flex-1">
+            {editingField === "name" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  className="text-2xl font-bold max-w-md"
+                  placeholder="Assignment name"
+                  disabled={savingField}
+                />
+                <Button size="sm" onClick={saveEdit} disabled={savingField || !editValue.trim()}>
+                  {savingField ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={cancelEdit} disabled={savingField}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 group">
+                <h1 className="text-2xl font-bold text-foreground">
+                  {assignment.name}
+                </h1>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 opacity-70 group-hover:opacity-100"
+                  onClick={() => startEdit("name", assignment.name)}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+            {editingField === "description" ? (
+              <div className="mt-2 space-y-2">
+                <Textarea
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  rows={3}
+                  className="mt-1"
+                  placeholder="Description"
+                  disabled={savingField}
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={saveEdit} disabled={savingField}>
+                    {savingField ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={cancelEdit} disabled={savingField}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start gap-2 mt-1 group">
+                <p className="text-muted-foreground flex-1 min-w-0">
+                  {assignment.description}
+                </p>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 opacity-70 group-hover:opacity-100"
+                  onClick={() => startEdit("description", assignment.description)}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
           </div>
-          <div className="flex items-center gap-2">
-            <Badge variant={assignment.isGroup ? "default" : "secondary"}>
-              {assignment.isGroup
-                ? `Group (max ${assignment.maxGroupSize})`
-                : "Solo"}
-            </Badge>
-            <Button
-              variant="destructive"
-              size="sm"
-              className="gap-1"
-              onClick={handleDeleteAssignment}
-            >
-              <Trash2 className="h-4 w-4" /> Delete
-            </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="gap-1"
+                onClick={() => setDeleteDialogOpen(true)}
+              >
+                <Trash2 className="h-4 w-4" /> Delete
+              </Button>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete assignment?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will permanently delete &quot;{assignment.name}&quot; and cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void handleDeleteAssignment();
+                    }}
+                    disabled={deleting}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Delete"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </div>
 
-        <div className="mt-3 flex items-center gap-4 text-sm text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <Calendar className="h-4 w-4" /> Due {assignment.dueDate}
-          </span>
+        <div className="mt-3 flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
+          {editingField === "dueDate" ? (
+            <div className="flex items-center gap-2">
+              <Calendar className="h-4 w-4" />
+              <Input
+                type="date"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                disabled={savingField}
+                className="w-auto"
+              />
+              <Button size="sm" onClick={saveEdit} disabled={savingField || !editValue.trim()}>
+                {savingField ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={cancelEdit} disabled={savingField}>
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 group">
+              <span className="flex items-center gap-1">
+                <Calendar className="h-4 w-4" /> Due {assignment.dueDate}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 opacity-70 group-hover:opacity-100"
+                onClick={() => startEdit("dueDate", assignment.dueDate)}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
           <span>Created {assignment.createdAt}</span>
+          <Badge
+            variant="secondary"
+            className="shrink-0 text-xs bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 border-0"
+          >
+            <UserCheck className="h-3 w-3 mr-1" />
+            {invitedUsers.length} assigned
+          </Badge>
+          <Badge
+            variant={assignment.isGroup ? "default" : "secondary"}
+            className="shrink-0 text-xs bg-gradient-to-r from-blue-100 to-purple-100 text-blue-700 border-0"
+          >
+            {assignment.isGroup
+              ? `Group (max ${assignment.maxGroupSize ?? "—"})`
+              : "Solo"}
+          </Badge>
+          {assignment.isGroup && (
+            editingField === "maxGroupSize" ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={2}
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  disabled={savingField}
+                  className="w-20"
+                />
+                <Button size="sm" onClick={saveEdit} disabled={savingField || !editValue.trim()}>
+                  {savingField ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={cancelEdit} disabled={savingField}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 group">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 opacity-70 group-hover:opacity-100"
+                  onClick={() => startEdit("maxGroupSize", String(assignment.maxGroupSize ?? 2))}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )
+          )}
         </div>
 
         {/* Invite Section */}
@@ -237,14 +538,46 @@ const AssignmentDetail = () => {
               />
             </DialogContent>
           </Dialog>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1"
-            onClick={() => inviteClassroom()}
+          <Dialog
+            open={classroomInviteOpen}
+            onOpenChange={handleClassroomInviteOpenChange}
           >
-            <Send className="h-4 w-4" /> Invite Classroom
-          </Button>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1">
+                <Send className="h-4 w-4" /> Invite Classroom
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Invite classroom</DialogTitle>
+                <DialogDescription>
+                  Choose a classroom to invite all its students to this assignment. Students already invited are skipped.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="max-h-[280px] overflow-y-auto space-y-2">
+                {classrooms.length === 0 && !classroomInviteLoading && (
+                  <p className="text-sm text-muted-foreground py-4">
+                    No classrooms found. Create one from the dashboard first.
+                  </p>
+                )}
+                {classrooms.map((c) => (
+                  <Button
+                    key={c.id}
+                    variant="outline"
+                    className="w-full justify-start gap-2 h-auto py-3"
+                    onClick={() => inviteClassroomStudents(c)}
+                    disabled={classroomInviteLoading}
+                  >
+                    <Users className="h-4 w-4 shrink-0" />
+                    <span className="font-medium truncate">{c.name}</span>
+                    <span className="text-muted-foreground text-xs">
+                      {c.students?.length ?? 0} students
+                    </span>
+                  </Button>
+                ))}
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
 
         {/* Invited users (mock; will be Firebase) */}
@@ -253,7 +586,7 @@ const AssignmentDetail = () => {
             <h2 className="mt-8 text-lg font-semibold text-foreground">
               Invited
             </h2>
-            <div className="mt-3 rounded-lg border">
+            <div className="mt-3 rounded-xl border border-border bg-white overflow-hidden">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -294,7 +627,7 @@ const AssignmentDetail = () => {
         <h2 className="mt-8 text-lg font-semibold text-foreground">
           {assignment.isGroup ? "Groups" : "Students"}
         </h2>
-        <div className="mt-3 rounded-lg border">
+        <div className="mt-3 rounded-xl border border-border bg-white overflow-hidden">
           <Table>
             <TableHeader>
               <TableRow>

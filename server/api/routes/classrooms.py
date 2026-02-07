@@ -3,6 +3,17 @@ from flask import Blueprint, current_app, jsonify, request
 
 from server.fb_admin import get_firestore, verify_id_token
 
+
+def _doc_id_from_add_result(result):
+    """Return document id from collection.add() result (DocumentReference or tuple)."""
+    if hasattr(result, "id"):
+        return str(result.id)
+    if isinstance(result, (list, tuple)) and len(result) >= 1:
+        first = result[0]
+        if hasattr(first, "id"):
+            return str(first.id)
+    return ""
+
 bp = Blueprint("classrooms", __name__, url_prefix="")
 COLLECTION = "classrooms"
 
@@ -40,7 +51,7 @@ def list_classrooms():
                 "students": d.get("students", []),
             })
         items.sort(key=lambda x: x["name"])
-        current_app.logger.info("[classrooms] GET fetched count=%s data=%s", len(items), items)
+        current_app.logger.info("[classrooms] GET fetched count=%s", len(items))
         return jsonify(items), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -62,19 +73,22 @@ def create_classroom():
     if not name:
         return jsonify({"error": "name is required"}), 400
     try:
-        doc_ref, _ = db.collection(COLLECTION).add({
+        add_result = db.collection(COLLECTION).add({
             "userId": uid,
             "name": name,
             "description": description,
             "students": students,
         })
-        return jsonify({
-            "id": doc_ref.id,
+        doc_id = _doc_id_from_add_result(add_result)
+        payload = {
+            "id": doc_id,
             "name": name,
             "description": description,
-            "students": students,
-        }), 201
+            "students": students or [],
+        }
+        return jsonify(payload), 201
     except Exception as e:
+        current_app.logger.exception(e)
         return jsonify({"error": str(e)}), 500
 
 
@@ -94,12 +108,13 @@ def get_classroom(classroom_id):
         d = ref.to_dict()
         if d.get("userId") != uid:
             return jsonify({"error": "Forbidden"}), 403
-        return jsonify({
+        payload = {
             "id": ref.id,
             "name": d.get("name", ""),
             "description": d.get("description", ""),
             "students": d.get("students", []),
-        }), 200
+        }
+        return jsonify(payload), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -129,22 +144,24 @@ def update_classroom(classroom_id):
         updates["students"] = body["students"]
     if not updates:
         d = doc.to_dict()
-        return jsonify({
+        payload = {
             "id": doc.id,
             "name": d.get("name", ""),
             "description": d.get("description", ""),
             "students": d.get("students", []),
-        }), 200
+        }
+        return jsonify(payload), 200
     try:
         doc_ref.update(updates)
         doc = doc_ref.get()
         d = doc.to_dict()
-        return jsonify({
+        payload = {
             "id": doc.id,
             "name": d.get("name", ""),
             "description": d.get("description", ""),
             "students": d.get("students", []),
-        }), 200
+        }
+        return jsonify(payload), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

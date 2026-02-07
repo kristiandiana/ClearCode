@@ -10,7 +10,7 @@ import type { Classroom, Assignment, InvitedUser } from "@/data/mockData";
 
 function headers(
   token: string | null | undefined,
-  method: "GET" | "POST" | "PATCH" = "GET",
+  method: "GET" | "POST" | "PATCH" | "DELETE" = "GET",
 ): HeadersInit {
   const h: HeadersInit = {};
   if (method !== "GET") h["Content-Type"] = "application/json";
@@ -19,7 +19,7 @@ function headers(
 }
 
 async function request<T>(
-  method: "GET" | "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   path: string,
   token: string | null | undefined,
   body?: object,
@@ -30,7 +30,7 @@ async function request<T>(
     res = await fetch(url, {
       method,
       headers: headers(token, method),
-      ...(body && method !== "GET" ? { body: JSON.stringify(body) } : {}),
+      ...(body && method !== "GET" && method !== "DELETE" ? { body: JSON.stringify(body) } : {}),
     });
   } catch (err) {
     const msg =
@@ -128,11 +128,11 @@ export async function updateAssignment(
   token: string | null | undefined,
   id: string,
   data: Partial<
-    Pick<Assignment, "name" | "description" | "dueDate" | "groups">
+    Pick<Assignment, "name" | "description" | "dueDate" | "maxGroupSize" | "groups">
   >,
-): Promise<void> {
+): Promise<Assignment> {
   if (!token) throw new Error("Sign in required");
-  await request("PATCH", `/assignments/${id}`, token, data);
+  return request<Assignment>("PATCH", `/assignments/${id}`, token, data);
 }
 
 export async function fetchInvitedStudents(

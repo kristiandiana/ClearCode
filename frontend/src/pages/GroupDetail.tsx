@@ -5,12 +5,14 @@ import { Github } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import TopBar from "@/components/TopBar";
 import { useAuth } from "@/hooks/useAuth";
+import { useBreadcrumbTitles } from "@/contexts/BreadcrumbContext";
 import { fetchAssignment } from "@/lib/firestore";
 import type { Assignment } from "@/data/mockData";
 
 const GroupDetail = () => {
   const { assignmentId, groupId } = useParams();
   const { getAccessToken } = useAuth();
+  const { setTitles } = useBreadcrumbTitles();
   const [assignment, setAssignment] = useState<Assignment | null | undefined>(
     undefined,
   );
@@ -19,11 +21,22 @@ const GroupDetail = () => {
     if (!assignmentId) return;
     setAssignment(undefined);
     getAccessToken().then((token) =>
-      fetchAssignment(token, assignmentId).then((a) =>
-        setAssignment(a ?? null),
-      ),
+      fetchAssignment(token, assignmentId).then((a) => {
+        setAssignment(a ?? null);
+        const group = a?.groups.find((g) => g.id === groupId);
+        setTitles(
+          a && group
+            ? {
+                assignmentName: a.name,
+                assignmentId: a.id,
+                groupName: group.name,
+                groupId: group.id,
+              }
+            : {},
+        );
+      }),
     );
-  }, [assignmentId]);
+  }, [assignmentId, groupId, setTitles]);
 
   const group =
     assignment && typeof assignment === "object"

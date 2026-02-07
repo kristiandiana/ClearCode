@@ -4,6 +4,17 @@ from datetime import datetime
 
 from server.fb_admin import get_firestore, verify_id_token
 
+
+def _doc_id_from_add_result(result):
+    """Return document id from collection.add() result (DocumentReference or tuple)."""
+    if hasattr(result, "id"):
+        return str(result.id)
+    if isinstance(result, (list, tuple)) and len(result) >= 1:
+        first = result[0]
+        if hasattr(first, "id"):
+            return str(first.id)
+    return ""
+
 bp = Blueprint("assignments", __name__, url_prefix="")
 COLLECTION = "assignments"
 INVITES_COLLECTION = "assignmentInvites"
@@ -52,6 +63,8 @@ def list_assignments():
         items = []
         for ref in refs:
             d = ref.to_dict()
+            invite_snaps = db.collection(INVITES_COLLECTION).where("assignmentId", "==", ref.id).stream()
+            invited_count = sum(1 for _ in invite_snaps)
             items.append({
                 "id": ref.id,
                 "name": d.get("name", ""),
@@ -61,9 +74,10 @@ def list_assignments():
                 "isGroup": d.get("isGroup", False),
                 "maxGroupSize": d.get("maxGroupSize"),
                 "groups": d.get("groups", []),
+                "invitedCount": invited_count,
             })
         items.sort(key=lambda x: x.get("dueDate", ""), reverse=True)
-        current_app.logger.info("[assignments] GET fetched count=%s data=%s", len(items), items)
+        current_app.logger.info("[assignments] GET fetched count=%s", len(items))
         return jsonify(items), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -91,7 +105,7 @@ def create_assignment():
     if not due_date:
         return jsonify({"error": "dueDate is required"}), 400
     try:
-        doc_ref, _ = db.collection(COLLECTION).add({
+        add_result = db.collection(COLLECTION).add({
             "userId": uid,
             "name": name,
             "description": description,
@@ -101,17 +115,20 @@ def create_assignment():
             "maxGroupSize": max_group_size if is_group else None,
             "groups": groups,
         })
-        return jsonify({
-            "id": doc_ref.id,
+        doc_id = _doc_id_from_add_result(add_result)
+        payload = {
+            "id": doc_id,
             "name": name,
             "description": description,
             "createdAt": created_at,
             "dueDate": due_date,
             "isGroup": is_group,
             "maxGroupSize": max_group_size,
-            "groups": groups,
-        }), 201
+            "groups": groups or [],
+        }
+        return jsonify(payload), 201
     except Exception as e:
+        current_app.logger.exception(e)
         return jsonify({"error": str(e)}), 500
 
 
@@ -131,7 +148,7 @@ def get_assignment(assignment_id):
         d = ref.to_dict()
         if d.get("userId") != uid:
             return jsonify({"error": "Forbidden"}), 403
-        return jsonify({
+        payload = {
             "id": ref.id,
             "name": d.get("name", ""),
             "description": d.get("description", ""),
@@ -140,7 +157,8 @@ def get_assignment(assignment_id):
             "isGroup": d.get("isGroup", False),
             "maxGroupSize": d.get("maxGroupSize"),
             "groups": d.get("groups", []),
-        }), 200
+        }
+        return jsonify(payload), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -168,11 +186,14 @@ def update_assignment(assignment_id):
         updates["description"] = str(body["description"]).strip()
     if "dueDate" in body:
         updates["dueDate"] = str(body["dueDate"]).strip()
+    if "maxGroupSize" in body:
+        v = body["maxGroupSize"]
+        updates["maxGroupSize"] = int(v) if v is not None else None
     if "groups" in body:
         updates["groups"] = body["groups"]
     if not updates:
         d = doc.to_dict()
-        return jsonify({
+        payload = {
             "id": doc.id,
             "name": d.get("name", ""),
             "description": d.get("description", ""),
@@ -181,12 +202,13 @@ def update_assignment(assignment_id):
             "isGroup": d.get("isGroup", False),
             "maxGroupSize": d.get("maxGroupSize"),
             "groups": d.get("groups", []),
-        }), 200
+        }
+        return jsonify(payload), 200
     try:
         doc_ref.update(updates)
         doc = doc_ref.get()
         d = doc.to_dict()
-        return jsonify({
+        payload = {
             "id": doc.id,
             "name": d.get("name", ""),
             "description": d.get("description", ""),
@@ -195,7 +217,8 @@ def update_assignment(assignment_id):
             "isGroup": d.get("isGroup", False),
             "maxGroupSize": d.get("maxGroupSize"),
             "groups": d.get("groups", []),
-        }), 200
+        }
+        return jsonify(payload), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -223,7 +246,7 @@ def get_invited_students(assignment_id):
         for invite in invites:
             d = invite.to_dict()
             items.append({
-                "id": invite.id,
+                "id": str(invite.id),
                 "githubUsername": d.get("githubUsername", ""),
                 "avatarUrl": d.get("avatarUrl"),
                 "name": d.get("name"),
@@ -272,7 +295,7 @@ def invite_student(assignment_id):
         
         # Create invite in assignmentInvites collection
         now = datetime.utcnow().isoformat() + "Z"
-        invite_ref = db.collection(INVITES_COLLECTION).add({
+        add_result = db.collection(INVITES_COLLECTION).add({
             "assignmentId": assignment_id,
             "assignmentName": assignment_name,
             "githubUsername": github_username,
@@ -281,19 +304,23 @@ def invite_student(assignment_id):
             "status": "pending",
             "invitedAt": now,
         })
-        
+
         current_app.logger.info("[assignments] Invited %s to assignment %s", github_username, assignment_id)
-        return jsonify({
-            "id": invite_ref[1].id,
+
+        doc_id = _doc_id_from_add_result(add_result)
+        payload = {
+            "id": doc_id,
             "assignmentId": assignment_id,
-            "assignmentName": assignment_name,
+            "assignmentName": assignment_name or "",
             "githubUsername": github_username,
-            "avatarUrl": avatar_url,
-            "name": name,
+            "avatarUrl": str(avatar_url) if avatar_url is not None else None,
+            "name": str(name) if name is not None else None,
             "status": "pending",
             "invitedAt": now,
-        }), 201
+        }
+        return jsonify(payload), 201
     except Exception as e:
+        current_app.logger.exception(e)
         return jsonify({"error": str(e)}), 500
 
 
