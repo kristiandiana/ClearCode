@@ -19,6 +19,23 @@ def _uid_from_request():
     return claims.get("uid"), None
 
 
+@bp.route("/by-github-id", methods=["GET"])
+def get_assignments_by_github_id():
+    identity = (request.args.get("identity") or "").strip().lower()
+    current_app.logger.info("[extension] identity=%r", identity)
+
+
+    #call the firebase api to get the assignments for the user with the given github id
+
+    if not identity:
+        return jsonify({"identity": "", "assignments": []}), 200
+
+    assignments_by_user = {"iainmac32": {"Assignment 1!": "123", "Assignment 2!!": "123"}}
+
+    assignments = assignments_by_user.get(identity, ["test1assignment"])
+    return jsonify({"identity": identity, "assignments": assignments}), 200
+
+
 @bp.route("", methods=["GET"])
 def list_assignments():
     """List assignments for the authenticated user."""
