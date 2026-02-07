@@ -1,36 +1,284 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
+// extension.js
 const vscode = require('vscode');
+const { execSync } = require('child_process');
+const path = require('path');
 
-// This method is called when your extension is activated
-// Your extension is activated the very first time the command is executed
+const ASSIGNMENTS = [
+  'Assignment 1$039',
+  'Assignment 2$2',
+  'Assignment 3$3',
+  'Assignment 4$4'
+];
+
+const dirtyByFile = new Map(); // filePath -> Set(lineNumbers 0-based)
+let cachedIdentity = null;
+const repoCache = new Map(); // gitRoot -> repoLink
+
+class LiveChangeTrackerViewProvider {
+  constructor(outputChannelName) {
+    this.outputChannelName = outputChannelName;
+  }
+
+  resolveTreeItem(element) {
+    return element;
+  }
+
+  getTreeItem(element) {
+    return element;
+  }
+
+  getChildren() {
+    return [
+      new vscode.TreeItem(`Output: ${this.outputChannelName}`, vscode.TreeItemCollapsibleState.None),
+      new vscode.TreeItem('Tip: Open View → Output → Live Change Tracker', vscode.TreeItemCollapsibleState.None)
+    ];
+  }
+}
+
+
+
+function tryExec(cmd, cwd) {
+  try {
+    return execSync(cmd, { cwd, stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+  } catch {
+    return null;
+  }
+}
 
 /**
- * @param {vscode.ExtensionContext} context
+ * Zero-input identity:
+ * 1) SSH GitHub remote → username
+ * 2) GitHub CLI (gh) login
+ * 3) git user.name / user.email
  */
-function activate(context) {
+function getAutoIdentity(workspaceFolder) {
+  if (cachedIdentity) return cachedIdentity;
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "clearcode" is now active!');
+  const remote = tryExec('git remote get-url origin', workspaceFolder);
+  if (remote) {
+    const m = remote.match(/^git@github\.com:([^/]+)\/.+$/);
+    if (m && m[1]) {
+      cachedIdentity = m[1];
+      return cachedIdentity;
+    }
+  }
 
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with  registerCommand
-	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('clearcode.helloWorld', function () {
-		// The code you place here will be executed every time your command is executed
+  const ghUser = tryExec('gh api user -q .login', workspaceFolder);
+  if (ghUser) {
+    cachedIdentity = ghUser;
+    return cachedIdentity;
+  }
 
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from ClearCode!');
-	});
+  const name = tryExec('git config user.name', workspaceFolder);
+  const email = tryExec('git config user.email', workspaceFolder);
 
-	context.subscriptions.push(disposable);
+  cachedIdentity = name || email || 'unknown-user';
+  return cachedIdentity;
 }
 
-// This method is called when your extension is deactivated
+
+
+// ---------------- REPO DETECTION ----------------
+
+function getGitRootForFile(filePath) {
+  return tryExec('git rev-parse --show-toplevel', path.dirname(filePath));
+}
+
+function normalizeGithubRemote(remoteUrl) {
+  if (!remoteUrl) return null;
+
+  // SSH: git@github.com:USER/REPO.git
+  let m = remoteUrl.match(/^git@github\.com:([^/]+)\/(.+?)(\.git)?$/);
+  if (m) return `https://github.com/${m[1]}/${m[2]}`;
+
+  // HTTPS: https://github.com/USER/REPO.git
+  m = remoteUrl.match(/^https:\/\/github\.com\/([^/]+)\/(.+?)(\.git)?$/);
+  if (m) return `https://github.com/${m[1]}/${m[2]}`;
+
+  return null;
+}
+
+function getRepoLinkForFile(filePath) {
+  const gitRoot = getGitRootForFile(filePath);
+  if (!gitRoot) return 'none';
+
+  if (repoCache.has(gitRoot)) {
+    return repoCache.get(gitRoot);
+  }
+
+  const remote = tryExec('git remote get-url origin', gitRoot);
+  const repoLink = normalizeGithubRemote(remote) || 'none';
+
+  repoCache.set(gitRoot, repoLink);
+  return repoLink;
+}
+
+// ---------------- CHANGE TRACKING ----------------
+
+function markDirty(filePath, line0) {
+  if (!dirtyByFile.has(filePath)) dirtyByFile.set(filePath, new Set());
+  dirtyByFile.get(filePath).add(line0);
+}
+
+function getOpenDocByPath(filePath) {
+  return vscode.workspace.textDocuments.find(d => d.uri.fsPath === filePath) || null;
+}
+
+// ---------------- EXTENSION LIFECYCLE ----------------
+class AssignmentsProvider {
+  constructor(context, identity, output) {
+    this.context = context;
+    this.identity = identity;
+    this.output = output;
+    this._onDidChangeTreeData = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+  }
+
+  refresh() {
+    this._onDidChangeTreeData.fire();
+  }
+
+  getTreeItem(item) {
+    return item;
+  }
+
+  getChildren() {
+
+	const assignments = ASSIGNMENTS;
+	const assignmentIDs = ['112', '222', '332', '442'];
+	//print out "username" has these assignments "assignment names"
+	this.output.appendLine(`User ${this.identity} has assignments: ${assignments.join(', ')}`);
+	
+
+    return assignments.map(name => {
+      const key = `assignmentFile:${name}`;
+      const currentFile = this.context.globalState.get(key, 'not set');
+
+      const item = new vscode.TreeItem(
+        `${name}  —  ${currentFile}`,
+        vscode.TreeItemCollapsibleState.None
+      );
+
+      item.contextValue = 'assignmentItem';
+      item.command = {
+        command: 'live.setAssignmentFile',
+        title: 'Set Assignment File',
+        arguments: [name]
+      };
+
+      return item;
+    });
+  }
+}
+
+
+
+function activate(context) {
+	
+  const output = vscode.window.createOutputChannel('Live Change Tracker');
+
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+  const identity = getAutoIdentity(workspaceFolder);
+  //show the identity in the output for debugging
+  output.appendLine(`Live Change Tracker initialized with identity: ${identity}`);
+
+
+  // --- Assignments sidebar ---
+  const assignmentsProvider = new AssignmentsProvider(context, identity, output);
+  vscode.window.registerTreeDataProvider('assignmentsView', assignmentsProvider);
+
+
+  // Click Assignment 1/2/etc -> prompt for file path
+  context.subscriptions.push(
+    vscode.commands.registerCommand('live.setAssignmentFile', async (assignmentName) => {
+      const key = `assignmentFile:${assignmentName}`;
+      const current = context.globalState.get(key, '');
+
+      const file = await vscode.window.showInputBox({
+        title: `${assignmentName} file`,
+        prompt: 'Enter the filename or relative path in your repo (e.g., A1.py or src/A1.py)',
+        value: current || '',
+        ignoreFocusOut: true
+      });
+
+      if (file === undefined) return; // user cancelled
+
+      await context.globalState.update(key, file.trim() || 'not set');
+      assignmentsProvider.refresh();
+      vscode.window.showInformationMessage(`${assignmentName} file set to: ${file.trim() || 'not set'}`);
+    })
+  );
+
+
+
+
+  const changeListener = vscode.workspace.onDidChangeTextDocument(event => {
+    const doc = event.document;
+    const filePath = doc.uri.fsPath;
+
+    for (const change of event.contentChanges) {
+      const start = change.range.start.line;
+      const end = change.range.end.line;
+      const insertedLines = change.text.split('\n').length - 1;
+
+      const last = Math.min(
+        doc.lineCount - 1,
+        Math.max(end + insertedLines, start)
+      );
+
+      for (let line = start; line <= last; line++) {
+        markDirty(filePath, line);
+      }
+    }
+  });
+
+  const interval = setInterval(() => {
+    if (dirtyByFile.size === 0) return;
+
+    output.appendLine(`\n=== ${identity} @ ${new Date().toLocaleTimeString()} ===`);
+
+    for (const [filePath, linesSet] of dirtyByFile.entries()) {
+      const doc = getOpenDocByPath(filePath);
+      const repoLink = getRepoLinkForFile(filePath);
+
+      if (!doc) {
+        output.appendLine(
+          `${identity} | ${repoLink} | ${path.basename(filePath)} (not open)`
+        );
+        continue;
+      }
+
+      const lines = Array.from(linesSet).sort((a, b) => a - b);
+
+      for (const line0 of lines) {
+        if (line0 < 0 || line0 >= doc.lineCount) continue;
+        const text = doc.lineAt(line0).text;
+
+
+
+		for (const name of ASSIGNMENTS) {
+		const key = `assignmentFile:${name}`;
+		const selected = context.globalState.get(key, 'not set');
+		output.appendLine(`  ${name} -> ${selected}`);
+		}
+
+
+        output.appendLine(
+          `${identity} | ${repoLink} | ${path.basename(filePath)} : Line ${line0 + 1} → ${text}`
+        );
+      }
+    }
+
+    dirtyByFile.clear();
+    output.show(true);
+  }, 60_000);
+
+  context.subscriptions.push(changeListener);
+  context.subscriptions.push({ dispose: () => clearInterval(interval) });
+}
+
 function deactivate() {}
 
-module.exports = {
-	activate,
-	deactivate
-}
+module.exports = { activate, deactivate };
