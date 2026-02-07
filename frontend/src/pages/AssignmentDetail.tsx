@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
-import { Calendar, Users, UserPlus, Send, Trash2, Pencil, Loader2, UserCheck } from "lucide-react";
+import { useParams, useNavigate } from "react-router-dom";
+import { useMemo } from "react";
+import { Calendar, Users, UserPlus, Send, Trash2, Pencil, Loader2, UserCheck, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -31,6 +32,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import TopBar from "@/components/TopBar";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -47,14 +49,9 @@ import {
 } from "@/lib/firestore";
 import { GitHubUserSearch } from "@/components/GitHubUserSearch";
 import { UserAvatarName } from "@/components/UserAvatarName";
+import { AssignmentProgress } from "@/components/AssignmentProgress";
 import type { Assignment, Classroom, InvitedUser } from "@/data/mockData";
 import type { GitHubUser } from "@/lib/api";
-
-const statusColor: Record<string, "default" | "secondary" | "destructive"> = {
-  active: "default",
-  submitted: "secondary",
-  graded: "secondary",
-};
 
 const AssignmentDetail = () => {
   const { assignmentId } = useParams();
@@ -74,7 +71,20 @@ const AssignmentDetail = () => {
   const [savingField, setSavingField] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [invitedSearch, setInvitedSearch] = useState("");
+  const [activeTab, setActiveTab] = useState("progress");
+  const [progressSearch, setProgressSearch] = useState("");
   const { getAccessToken } = useAuth();
+
+  const filteredInvitedUsers = useMemo(() => {
+    const q = invitedSearch.trim().toLowerCase();
+    if (!q) return invitedUsers;
+    return invitedUsers.filter(
+      (inv) =>
+        inv.githubUsername.toLowerCase().includes(q) ||
+        (inv.name?.toLowerCase().includes(q)),
+    );
+  }, [invitedUsers, invitedSearch]);
   const { setTitles } = useBreadcrumbTitles();
 
   useEffect(() => {
@@ -580,92 +590,86 @@ const AssignmentDetail = () => {
           </Dialog>
         </div>
 
-        {/* Invited users (mock; will be Firebase) */}
-        {invitedUsers.length > 0 && (
-          <>
-            <h2 className="mt-8 text-lg font-semibold text-foreground">
-              Invited
-            </h2>
-            <div className="mt-3 rounded-xl border border-border bg-white overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>GitHub User</TableHead>
-                    <TableHead className="w-20">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {invitedUsers.map((inv) => (
-                    <TableRow key={inv.id ?? inv.githubUsername}>
-                      <TableCell>
-                        <UserAvatarName
-                          githubUsername={inv.githubUsername}
-                          avatarUrl={inv.avatarUrl}
-                          name={inv.name}
-                          size="sm"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0"
-                          onClick={() => inv.id && handleDeleteInvite(inv.id)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+        {/* Tabs: Progress (first) and Invited */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-8">
+          <TabsList className="bg-muted">
+            <TabsTrigger value="progress">Progress</TabsTrigger>
+            <TabsTrigger value="invited">Invited</TabsTrigger>
+          </TabsList>
+          <TabsContent value="progress" className="mt-3">
+            <AssignmentProgress
+              assignmentId={assignment.id}
+              isGroup={assignment.isGroup}
+              search={progressSearch}
+              onSearchChange={setProgressSearch}
+            />
+          </TabsContent>
+          <TabsContent value="invited" className="mt-3">
+            <div className="rounded-xl border border-border bg-white overflow-hidden flex flex-col" style={{ maxHeight: "min(calc(100vh - 18rem), 480px)" }}>
+              <div className="p-3 border-b border-border shrink-0">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    type="search"
+                    placeholder="Search invited users…"
+                    value={invitedSearch}
+                    onChange={(e) => setInvitedSearch(e.target.value)}
+                    className="pl-9 h-9 bg-white border-border"
+                  />
+                </div>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                {filteredInvitedUsers.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-6 text-center">
+                    {invitedSearch.trim() ? "No invited users match your search." : "No one invited yet. Use the buttons above to invite users or a classroom."}
+                  </p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>GitHub User</TableHead>
+                        <TableHead className="w-20">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredInvitedUsers.map((inv) => (
+                        <TableRow key={inv.id ?? inv.githubUsername}>
+                          <TableCell
+                            className="cursor-pointer hover:bg-muted/50"
+                            onClick={() => {
+                              setProgressSearch(inv.githubUsername);
+                              setActiveTab("progress");
+                            }}
+                          >
+                            <UserAvatarName
+                              githubUsername={inv.githubUsername}
+                              avatarUrl={inv.avatarUrl}
+                              name={inv.name}
+                              size="sm"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                inv.id && handleDeleteInvite(inv.id);
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
             </div>
-          </>
-        )}
-
-        {/* Groups Table */}
-        <h2 className="mt-8 text-lg font-semibold text-foreground">
-          {assignment.isGroup ? "Groups" : "Students"}
-        </h2>
-        <div className="mt-3 rounded-xl border border-border bg-white overflow-hidden">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>
-                  {assignment.isGroup ? "Group" : "Student"}
-                </TableHead>
-                <TableHead>Members</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {assignment.groups.map((g) => (
-                <TableRow key={g.id} className="cursor-pointer">
-                  <TableCell>
-                    <Link
-                      to={`/dashboard/assignments/${assignment.id}/groups/${g.id}`}
-                      className="font-medium text-primary hover:underline"
-                    >
-                      {g.name}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="flex items-center gap-1 text-sm">
-                    <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                    {g.members.map((m) => `@${m}`).join(", ")}
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={statusColor[g.status] ?? "secondary"}
-                      className="capitalize"
-                    >
-                      {g.status}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   );
