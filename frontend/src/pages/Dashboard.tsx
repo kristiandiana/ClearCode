@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Plus, Calendar, Users, Trash2 } from "lucide-react";
+import { useMemo } from "react";
+import { Plus, Calendar, Users, Search, UserCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -14,12 +16,7 @@ import TopBar from "@/components/TopBar";
 import CreateAssignmentDialog from "@/components/CreateAssignmentDialog";
 import CreateClassroomDialog from "@/components/CreateClassroomDialog";
 import { useAuth } from "@/hooks/useAuth";
-import {
-  fetchClassrooms,
-  fetchAssignments,
-  deleteClassroom,
-  deleteAssignment,
-} from "@/lib/firestore";
+import { fetchClassrooms, fetchAssignments } from "@/lib/firestore";
 import { toast } from "sonner";
 import type { Assignment, Classroom } from "@/data/mockData";
 
@@ -27,74 +24,59 @@ const Dashboard = () => {
   const { user, getAccessToken } = useAuth();
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [assignmentSearch, setAssignmentSearch] = useState("");
+  const [classroomSearch, setClassroomSearch] = useState("");
+
+  const filteredAssignments = useMemo(() => {
+    const q = assignmentSearch.trim().toLowerCase();
+    if (!q) return assignments;
+    return assignments.filter(
+      (a) =>
+        a.name.toLowerCase().includes(q) ||
+        (a.description && a.description.toLowerCase().includes(q)),
+    );
+  }, [assignments, assignmentSearch]);
+
+  const filteredClassrooms = useMemo(() => {
+    const q = classroomSearch.trim().toLowerCase();
+    if (!q) return classrooms;
+    return classrooms.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.description && c.description.toLowerCase().includes(q)),
+    );
+  }, [classrooms, classroomSearch]);
 
   const refetch = async () => {
     const token = await getAccessToken(true);
-    if (!token) return;
-    try {
-      const [classList, assignList] = await Promise.all([
-        fetchClassrooms(token),
-        fetchAssignments(token),
-      ]);
-      setClassrooms(classList);
-      setAssignments(assignList);
-    } catch (err) {
+    if (!token) throw new Error("Not authenticated");
+    const [classList, assignList] = await Promise.all([
+      fetchClassrooms(token),
+      fetchAssignments(token),
+    ]);
+    setClassrooms(classList);
+    setAssignments(assignList);
+  };
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    void refetch().catch((err) => {
       console.error("Failed to load dashboard data:", err);
       setClassrooms([]);
       setAssignments([]);
       toast.error(
         err instanceof Error ? err.message : "Failed to load dashboard data",
       );
-    }
-  };
-
-  const handleDeleteAssignment = async (id: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    if (!confirm("Are you sure you want to delete this assignment?")) return;
-
-    try {
-      setDeletingId(id);
-      const token = await getAccessToken();
-      if (!token) throw new Error("Not authenticated");
-
-      await deleteAssignment(token, id);
-      setAssignments(assignments.filter((a) => a.id !== id));
-      toast.success("Assignment deleted");
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to delete assignment",
-      );
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
-  const handleDeleteClassroom = async (id: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    if (!confirm("Are you sure you want to delete this classroom?")) return;
-
-    try {
-      setDeletingId(id);
-      const token = await getAccessToken();
-      if (!token) throw new Error("Not authenticated");
-
-      await deleteClassroom(token, id);
-      setClassrooms(classrooms.filter((c) => c.id !== id));
-      toast.success("Classroom deleted");
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to delete classroom",
-      );
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
-  useEffect(() => {
-    if (!user?.uid) return;
-    void refetch();
+    });
   }, [user?.uid]);
+
+  const handleAssignmentCreated = (_assignment: Assignment) => {
+    void refetch();
+  };
+
+  const handleClassroomCreated = (_classroom: Classroom) => {
+    void refetch();
+  };
 
   return (
     <div className="min-h-screen gradient-bg relative overflow-hidden">
@@ -112,14 +94,14 @@ const Dashboard = () => {
         <div className="mt-8 grid gap-8 lg:grid-cols-2">
           {/* Assignments */}
           <section
-            className="animate-fade-in-up"
-            style={{ animationDelay: "0.1s" }}
+            className="animate-fade-in-up rounded-2xl border border-border bg-white shadow-lg overflow-hidden flex flex-col"
+            style={{ animationDelay: "0.1s", maxHeight: "min(calc(100vh - 14rem), 520px)" }}
           >
-            <div className="mb-4 flex items-center justify-between">
+            <div className="p-4 border-b border-border flex items-center justify-between gap-3 shrink-0">
               <h2 className="text-lg font-semibold text-foreground">
                 Assignments
               </h2>
-              <CreateAssignmentDialog onCreated={() => void refetch()}>
+              <CreateAssignmentDialog onCreated={handleAssignmentCreated} onSuccess={refetch}>
                 <Button
                   size="sm"
                   className="gap-1 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white"
@@ -128,26 +110,41 @@ const Dashboard = () => {
                 </Button>
               </CreateAssignmentDialog>
             </div>
-            <div className="space-y-3">
-              {assignments.map((a, i) => (
-                <div
-                  key={a.id}
-                  style={{
-                    animation: `fadeInUp 0.6s ease-out ${0.2 + i * 0.05}s both`,
-                  }}
-                  className="group relative"
-                >
-                  <Link to={`/dashboard/assignments/${a.id}`} className="block">
-                    <Card className="glass-card border-white/40 bg-white/50 backdrop-blur-xl soft-shadow card-hover transition-all duration-300">
+            <div className="p-3 border-b border-border shrink-0">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="search"
+                  placeholder="Search assignments…"
+                  value={assignmentSearch}
+                  onChange={(e) => setAssignmentSearch(e.target.value)}
+                  className="pl-9 h-9 bg-white border-border placeholder:text-muted-foreground/80"
+                />
+              </div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+              {filteredAssignments.map((a, i) => (
+                <div key={a.id} className="relative">
+                  <Link to={`/dashboard/assignments/${a.id}`} className="block group">
+                    <Card className="rounded-xl border border-border bg-white/90 backdrop-blur-sm soft-shadow card-hover transition-all duration-300 cursor-pointer">
                       <CardHeader className="pb-2">
-                        <div className="flex items-start justify-between">
-                          <CardTitle className="text-base">{a.name}</CardTitle>
-                          <Badge
-                            variant={a.isGroup ? "default" : "secondary"}
-                            className="text-xs bg-gradient-to-r from-blue-100 to-purple-100 text-blue-700"
-                          >
-                            {a.isGroup ? "Group" : "Solo"}
-                          </Badge>
+                        <div className="flex items-start justify-between gap-2">
+                          <CardTitle className="text-base group-hover:underline">{a.name}</CardTitle>
+                          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                            <Badge
+                              variant={a.isGroup ? "default" : "secondary"}
+                              className="text-xs bg-gradient-to-r from-blue-100 to-purple-100 text-blue-700"
+                            >
+                              {a.isGroup ? "Group" : "Solo"}
+                            </Badge>
+                            <Badge
+                              variant="secondary"
+                              className="text-xs bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 border-0"
+                            >
+                              <UserCheck className="h-3 w-3 mr-0.5" />
+                              {a.invitedCount ?? 0} assigned
+                            </Badge>
+                          </div>
                         </div>
                         <CardDescription className="line-clamp-1">
                           {a.description}
@@ -161,30 +158,26 @@ const Dashboard = () => {
                       </CardContent>
                     </Card>
                   </Link>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={(e) => handleDeleteAssignment(a.id, e)}
-                    disabled={deletingId === a.id}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
                 </div>
               ))}
+              {filteredAssignments.length === 0 && (
+                <p className="text-sm text-muted-foreground py-6 text-center">
+                  {assignmentSearch.trim() ? "No assignments match your search." : "No assignments yet."}
+                </p>
+              )}
             </div>
           </section>
 
           {/* Classrooms */}
           <section
-            className="animate-fade-in-up"
-            style={{ animationDelay: "0.15s" }}
+            className="animate-fade-in-up rounded-2xl border border-border bg-white shadow-lg overflow-hidden flex flex-col"
+            style={{ animationDelay: "0.15s", maxHeight: "min(calc(100vh - 14rem), 520px)" }}
           >
-            <div className="mb-4 flex items-center justify-between">
+            <div className="p-4 border-b border-border flex items-center justify-between gap-3 shrink-0">
               <h2 className="text-lg font-semibold text-foreground">
                 Classrooms
               </h2>
-              <CreateClassroomDialog onCreated={() => void refetch()}>
+              <CreateClassroomDialog onCreated={handleClassroomCreated} onSuccess={refetch}>
                 <Button
                   size="sm"
                   className="gap-1 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white"
@@ -193,19 +186,25 @@ const Dashboard = () => {
                 </Button>
               </CreateClassroomDialog>
             </div>
-            <div className="space-y-3">
-              {classrooms.map((c, i) => (
-                <div
-                  key={c.id}
-                  style={{
-                    animation: `fadeInUp 0.6s ease-out ${0.25 + i * 0.05}s both`,
-                  }}
-                  className="group relative"
-                >
-                  <Link to={`/dashboard/classrooms/${c.id}`} className="block">
-                    <Card className="glass-card border-white/40 bg-white/50 backdrop-blur-xl soft-shadow card-hover transition-all duration-300">
+            <div className="p-3 border-b border-border shrink-0">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="search"
+                  placeholder="Search classrooms…"
+                  value={classroomSearch}
+                  onChange={(e) => setClassroomSearch(e.target.value)}
+                  className="pl-9 h-9 bg-white border-border placeholder:text-muted-foreground/80"
+                />
+              </div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+              {filteredClassrooms.map((c) => (
+                <div key={c.id} className="relative">
+                  <Link to={`/dashboard/classrooms/${c.id}`} className="block group">
+                    <Card className="rounded-xl border border-border bg-white/90 backdrop-blur-sm soft-shadow card-hover transition-all duration-300 cursor-pointer">
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-base">{c.name}</CardTitle>
+                        <CardTitle className="text-base group-hover:underline">{c.name}</CardTitle>
                         <CardDescription className="line-clamp-1">
                           {c.description}
                         </CardDescription>
@@ -216,17 +215,13 @@ const Dashboard = () => {
                       </CardContent>
                     </Card>
                   </Link>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={(e) => handleDeleteClassroom(c.id, e)}
-                    disabled={deletingId === c.id}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
                 </div>
               ))}
+              {filteredClassrooms.length === 0 && (
+                <p className="text-sm text-muted-foreground py-6 text-center">
+                  {classroomSearch.trim() ? "No classrooms match your search." : "No classrooms yet."}
+                </p>
+              )}
             </div>
           </section>
         </div>

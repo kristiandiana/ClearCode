@@ -20,6 +20,8 @@ export interface Assignment {
   isGroup: boolean;
   maxGroupSize?: number;
   groups: Group[];
+  /** Number of students invited/assigned (from API list). */
+  invitedCount?: number;
 }
 
 export interface Group {
