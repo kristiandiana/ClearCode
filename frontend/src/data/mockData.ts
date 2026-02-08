@@ -49,6 +49,14 @@ export interface SessionDetailEntry {
   lineContent?: string | null;
 }
 
+/** Citation attached to a session (from extension). */
+export interface SessionCitation {
+  type: "agent prompt" | "external ai prompt" | "external source (manual)";
+  githubUsername: string;
+  timestamp: string;
+  text?: string | null;
+}
+
 /** A coding session: date + time range, with expandable detail entries. */
 export interface Session {
   id: string;
@@ -62,6 +70,8 @@ export interface Session {
   details: SessionDetailEntry[];
   /** For group work: which user(s) this session belongs to (can be one or many). */
   githubUsernames?: string[];
+  /** Citations for this session (by type: agent prompt, external ai prompt, external source). */
+  citations?: SessionCitation[];
 }
 
 /** One "section" of progress: either a solo student or a group (identified by repo). */
