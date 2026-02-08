@@ -27,26 +27,18 @@ function formatTimeRange(start: string, end: string): string {
   return `${format(d, "MMM d, h:mm a")} – ${format(new Date(end), "MMM d, h:mm a")}`;
 }
 
-function SessionDetailRow({
-  entry,
-  showUser,
-}: {
-  entry: SessionDetailEntry;
-  showUser: boolean;
-}) {
+function SessionDetailRow({ entry }: { entry: SessionDetailEntry }) {
   return (
     <tr className="border-b border-border last:border-0">
-      {showUser && (
-        <td className="py-2 pl-4 pr-2 text-sm text-muted-foreground whitespace-nowrap">
-          {entry.githubUsername ? (
-            <span className="flex items-center gap-1">
-              <User className="h-3.5 w-3.5" />@{entry.githubUsername}
-            </span>
-          ) : (
-            "—"
-          )}
-        </td>
-      )}
+      <td className="py-2 pl-4 pr-2 text-sm text-muted-foreground whitespace-nowrap">
+        {entry.githubUsername ? (
+          <span className="flex items-center gap-1">
+            <User className="h-3.5 w-3.5" />@{entry.githubUsername}
+          </span>
+        ) : (
+          "—"
+        )}
+      </td>
       <td className="py-2 px-2 text-sm whitespace-nowrap">
         {format(new Date(entry.timestamp), "MMM d, h:mm a")}
       </td>
@@ -106,9 +98,7 @@ function SessionRow({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/50">
-                  {isGroup && (
-                    <th className="text-left py-2 pl-4 pr-2 font-medium text-muted-foreground">User</th>
-                  )}
+                  <th className="text-left py-2 pl-4 pr-2 font-medium text-muted-foreground">User</th>
                   <th className="text-left py-2 px-2 font-medium text-muted-foreground">Time</th>
                   <th className="text-left py-2 px-2 font-medium text-muted-foreground">LOC</th>
                   <th className="text-left py-2 px-2 font-medium text-muted-foreground">AI</th>
@@ -116,7 +106,7 @@ function SessionRow({
               </thead>
               <tbody>
                 {session.details.map((entry, i) => (
-                  <SessionDetailRow key={i} entry={entry} showUser={isGroup} />
+                  <SessionDetailRow key={i} entry={entry} />
                 ))}
               </tbody>
             </table>
@@ -146,7 +136,11 @@ function SectionCard({
           ) : (
             <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
           )}
-          <span className="font-medium text-foreground">{section.label}</span>
+          <span className="font-medium text-foreground">
+            {section.members && section.members.length > 0
+              ? section.members.map((m) => `@${m}`).join(", ")
+              : section.label}
+          </span>
           {section.repoLink && (
             <a
               href={section.repoLink}
@@ -157,11 +151,6 @@ function SectionCard({
             >
               <Github className="h-4 w-4" /> Repo
             </a>
-          )}
-          {isGroup && section.members && section.members.length > 0 && (
-            <span className="text-xs text-muted-foreground">
-              @{section.members.join(", @")}
-            </span>
           )}
           <span className="text-sm text-muted-foreground ml-auto">
             {section.sessions.length} session{section.sessions.length !== 1 ? "s" : ""}

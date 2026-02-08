@@ -465,6 +465,8 @@ def get_progress_by_assignment_id(assignment_id):
         # convert groups_json back to groups
         groups = {repo: set(users) for repo, users in groups_json.items()}
 
+        print("DEBUG: groups =", groups)
+
         # groups: dict { repo_url: [github_id, ...] } or legacy list; fall back to sample for testing
         raw_groups = groups if groups else SAMPLE_GROUPS
 
@@ -499,7 +501,7 @@ def get_progress_by_assignment_id(assignment_id):
                 "id": group_id,
                 "label": group_label,
                 "repoLink": repo_link,
-                "members": members if len(members) > 1 else None,
+                "members": members,
                 "sessions": sessions,
             })
 
@@ -515,7 +517,7 @@ def get_progress_by_assignment_id(assignment_id):
                 "id": "progress",
                 "label": "Progress",
                 "repoLink": repo_link,
-                "members": members if len(members) > 1 else None,
+                "members": members,
                 "sessions": all_sessions,
             }]
 
