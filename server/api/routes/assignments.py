@@ -1,7 +1,28 @@
 """Assignments CRUD via Flask; data stored in Firestore."""
 from flask import Blueprint, current_app, jsonify, request
+from datetime import datetime, timezone
 
 from server.fb_admin import get_firestore, verify_id_token
+
+import os
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+def get_firestore():
+    try:
+        # Initialize only once
+        if not firebase_admin._apps:
+            cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            if not cred_path:
+                print("Missing GOOGLE_APPLICATION_CREDENTIALS")
+                return None
+            firebase_admin.initialize_app(credentials.Certificate(cred_path))
+
+        return firestore.client()
+    except Exception as e:
+        print("Firestore init failed:", e)
+        return None
+
 
 bp = Blueprint("assignments", __name__, url_prefix="")
 COLLECTION = "assignments"
@@ -19,21 +40,134 @@ def _uid_from_request():
     return claims.get("uid"), None
 
 
+
+
+
+
+
+
+
+
+
+# @bp.route("/by-github-id", methods=["GET"])
+# def get_assignments_by_github_id():
+#     identity = (request.args.get("identity") or "").strip().lower()
+#     current_app.logger.info("[extension] identity=%r", identity)
+
+
+#     #call the firebase api to get the assignments for the user with the given github id
+
+#     if not identity:
+#         return jsonify({"identity": "", "assignments": []}), 200
+
+#     assignments_by_user = {"iainmac32": [{"name": "a1", "id": 932},{"name": "a2", "id": 12}]}
+
+#     assignments = assignments_by_user.get(identity, ["test1assignment"])
+#     return jsonify({"identity": identity, "assignments": assignments}), 200
+
+
+
+
 @bp.route("/by-github-id", methods=["GET"])
 def get_assignments_by_github_id():
     identity = (request.args.get("identity") or "").strip().lower()
     current_app.logger.info("[extension] identity=%r", identity)
-
-
-    #call the firebase api to get the assignments for the user with the given github id
+    print("here!")
 
     if not identity:
         return jsonify({"identity": "", "assignments": []}), 200
 
-    assignments_by_user = {"iainmac32": {"Assignment 1!": "123", "Assignment 2!!": "123"}}
+    db = get_firestore()
+    if db is None:
+        print("no db!")
+        return jsonify({"error": "Database not configured"}), 503
 
-    assignments = assignments_by_user.get(identity, ["test1assignment"])
-    return jsonify({"identity": identity, "assignments": assignments}), 200
+    try:
+        print("db:", db)
+        # Query the junction table based on your schema
+        invites_ref = db.collection("assignmentInvites")
+        docs = invites_ref.where("githubUsername", "==", identity).stream()
+
+        assignments_list = []
+        for doc in docs:
+            data = doc.to_dict()
+            assignments_list.append({
+                "id": data.get("assignmentId"),
+                "name": data.get("assignmentName")
+            })
+
+
+        print("here!")
+        print(jsonify({
+            "assignments": assignments_list,
+            "identity": identity
+        }))
+        # Final response matches your requested format
+        return jsonify({
+            "assignments": assignments_list,
+            "identity": identity
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error("Firestore query failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+
+
+
+@bp.route("/push", methods=["POST"])
+def push_line_event():
+    payload = request.get_json(silent=True)
+    if payload is None or not isinstance(payload, dict):
+        return jsonify({"error": "Expected JSON object"}), 400
+
+    required = ["AssignmentID", "GitHubName", "GitHubLink", "FilePath", "LineNumber", "LineContent"]
+    missing = [k for k in required if k not in payload]
+    if missing:
+        return jsonify({"error": "Missing fields", "missing": missing}), 400
+
+    db = get_firestore()
+    if db is None:
+        return jsonify({"error": "Database not configured"}), 503
+
+    try:
+        event_doc = {
+            "assignmentId": str(payload["AssignmentID"]),   # ✅ string
+            "githubUsername": str(payload["GitHubName"]).strip().lower(),
+            "githubLink": str(payload.get("GitHubLink", "")),
+            "filePath": str(payload["FilePath"]),
+            "lineNumber": int(payload["LineNumber"]),
+            "lineContent": str(payload["LineContent"]),
+            "updatedAt": str(payload.get("updatedAt", "")),
+        }
+
+        doc_ref = db.collection("lineEvents").document()
+        doc_ref.set(event_doc)
+
+        return jsonify({"ok": True, "id": doc_ref.id}), 200
+
+    except Exception as e:
+        current_app.logger.exception("Push failed")
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 @bp.route("", methods=["GET"])

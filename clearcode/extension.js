@@ -186,6 +186,7 @@ async function activate(context) {
   //flask call here to get the assignments for the user (send user identity, get back list of assignments)
 
   let assignments = [];
+  let assignmentIDs = [];
   try {
     const res = await fetch(
       `http://localhost:5000/api/v1/assignments/by-github-id?identity=${encodeURIComponent(identity)}`,
@@ -193,7 +194,8 @@ async function activate(context) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     output.appendLine(`data from flask: ${JSON.stringify(data)}`);
-    assignments = data.map((a) => a.name || a.id);
+  assignments = (data.assignments || []).map(a => a.name);
+  assignmentIDs = (data.assignments || []).map(a => a.id);
   } catch (err) {
     output.appendLine(`Failed to fetch assignments: ${err.message}`);
     assignments = [];
@@ -205,10 +207,7 @@ async function activate(context) {
     assignments.length > 0
       ? assignments
       : [
-          "Assignment 1$23",
-          "Assignment 2$2",
-          "Assignment 3$3",
-          "Assignment 4$4",
+          "No Assignments Found"
         ];
 
   // --- Assignments sidebar ---
@@ -294,15 +293,68 @@ async function activate(context) {
         if (line0 < 0 || line0 >= doc.lineCount) continue;
         const text = doc.lineAt(line0).text;
 
-        for (const name of ASSIGNMENTS) {
+
+
+        //push to firebase only if edited file is part of an assignment
+        let assignmentWantedFiles = [];
+        for (const name of assignments) {
           const key = `assignmentFile:${name}`;
-          const selected = context.globalState.get(key, "not set");
-          output.appendLine(`  ${name} -> ${selected}`);
+          const WantedAssignmentFile = context.globalState.get(key, "not set");
+          assignmentWantedFiles.push({ name, file: WantedAssignmentFile });
         }
 
-        output.appendLine(
-          `${identity} | ${repoLink} | ${path.basename(filePath)} : Line ${line0 + 1} → ${text}`,
-        );
+        for (const a of assignmentWantedFiles){
+          if (a.file !== "not set" && a.file === path.basename(filePath)){
+            output.appendLine(`File ${a.file} is associated with assignment ${a.name}`);
+            //push to flask
+
+            //asignmentIDs 
+              output.appendLine(
+                `${identity} | ${repoLink} | ${path.basename(filePath)} : Line ${line0 + 1} → ${text}`,
+              );
+
+              const payload = {
+                AssignmentID: assignmentIDs[assignments.indexOf(a.name)],
+                GitHubName: identity,   // or assignments/assignmentIDs
+                GitHubLink: repoLink,
+                FilePath: path.basename(filePath),
+                LineNumber: line0 + 1,
+                LineContent: text,
+                updatedAt: new Date().toISOString()
+              };
+            output.appendLine("payload to send to flask: " + JSON.stringify(payload));
+            //flask send here 
+            
+            async function pushToFlask(payload, output) {
+              try {
+                const res = await fetch(
+                  "http://localhost:5000/api/v1/assignments/push",
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                  }
+                );
+
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                output.appendLine("Flask response: " + JSON.stringify(data));
+              } catch (err) {
+                output.appendLine("Failed to push payload: " + err.message);
+              }
+            }
+            pushToFlask(payload, output);
+
+
+
+
+
+          }
+        }
+
+
+
+
       }
     }
 
