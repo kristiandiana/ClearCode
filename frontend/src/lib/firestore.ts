@@ -13,6 +13,7 @@ export {
   createAssignment,
   updateAssignment,
   deleteAssignment,
+  fetchProgress,
   fetchInvitedStudents,
   inviteStudent,
   deleteInvite,

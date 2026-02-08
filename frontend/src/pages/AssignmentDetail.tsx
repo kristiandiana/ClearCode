@@ -1,7 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useMemo } from "react";
-import { Calendar, Users, UserPlus, Send, Trash2, Pencil, Loader2, UserCheck, Search } from "lucide-react";
+import { Calendar, Users, UserPlus, Send, Trash2, Pencil, Loader2, UserCheck, Search, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -41,6 +40,7 @@ import { getGitHubUser } from "@/lib/api";
 import {
   fetchAssignment,
   fetchInvitedStudents,
+  fetchProgress,
   inviteStudent,
   deleteInvite,
   deleteAssignment,
@@ -50,7 +50,7 @@ import {
 import { GitHubUserSearch } from "@/components/GitHubUserSearch";
 import { UserAvatarName } from "@/components/UserAvatarName";
 import { AssignmentProgress } from "@/components/AssignmentProgress";
-import type { Assignment, Classroom, InvitedUser } from "@/data/mockData";
+import type { Assignment, Classroom, InvitedUser, ProgressSection } from "@/data/mockData";
 import type { GitHubUser } from "@/lib/api";
 
 const AssignmentDetail = () => {
@@ -74,7 +74,35 @@ const AssignmentDetail = () => {
   const [invitedSearch, setInvitedSearch] = useState("");
   const [activeTab, setActiveTab] = useState("progress");
   const [progressSearch, setProgressSearch] = useState("");
+  const [progressSections, setProgressSections] = useState<ProgressSection[] | null>(null);
+  const [progressLoading, setProgressLoading] = useState(false);
   const { getAccessToken } = useAuth();
+
+  const loadProgress = useCallback(async () => {
+    if (!assignment?.id) return;
+    setProgressLoading(true);
+    try {
+      const token = await getAccessToken();
+      const data = await fetchProgress(token, assignment.id);
+      setProgressSections(data.sections ?? []);
+    } catch (err) {
+      console.error("Progress fetch failed:", err);
+      setProgressSections([]);
+    } finally {
+      setProgressLoading(false);
+    }
+  }, [assignment?.id, getAccessToken]);
+
+  const isLoadingProgressRef = useRef(false);
+  const loadProgressGuarded = useCallback(async () => {
+    if (isLoadingProgressRef.current) return;
+    isLoadingProgressRef.current = true;
+    try {
+      await loadProgress();
+    } finally {
+      isLoadingProgressRef.current = false;
+    }
+  }, [loadProgress]);
 
   const filteredInvitedUsers = useMemo(() => {
     const q = invitedSearch.trim().toLowerCase();
@@ -112,6 +140,29 @@ const AssignmentDetail = () => {
       }
     });
   }, [assignmentId]);
+
+  useEffect(() => {
+    if (!assignment?.id) return;
+    let cancelled = false;
+    setProgressLoading(true);
+    getAccessToken()
+      .then((token) => fetchProgress(token, assignment.id))
+      .then((data) => {
+        if (!cancelled) setProgressSections(data?.sections ?? []);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error("Progress fetch failed:", err);
+          setProgressSections([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setProgressLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [assignment?.id]);
 
   const handleDeleteInvite = async (inviteId: string) => {
     try {
@@ -597,11 +648,29 @@ const AssignmentDetail = () => {
             <TabsTrigger value="invited">Invited</TabsTrigger>
           </TabsList>
           <TabsContent value="progress" className="mt-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => void loadProgressGuarded()}
+                disabled={progressLoading}
+              >
+                {progressLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}{" "}
+                Refresh
+              </Button>
+            </div>
             <AssignmentProgress
               assignmentId={assignment.id}
               isGroup={assignment.isGroup}
               search={progressSearch}
               onSearchChange={setProgressSearch}
+              sections={progressSections}
+              loading={progressLoading}
             />
           </TabsContent>
           <TabsContent value="invited" className="mt-3">

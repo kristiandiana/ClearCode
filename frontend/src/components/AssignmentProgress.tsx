@@ -8,6 +8,8 @@ import {
   User,
   Clock,
   Search,
+  Plus,
+  Minus,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -17,7 +19,6 @@ import {
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
 import type { ProgressSection, Session, SessionDetailEntry } from "@/data/mockData";
-import { mockProgressByAssignmentId } from "@/data/mockData";
 
 function formatTimeRange(start: string, end: string): string {
   const d = new Date(start);
@@ -28,16 +29,13 @@ function formatTimeRange(start: string, end: string): string {
   return `${format(d, "MMM d, h:mm a")} – ${format(new Date(end), "MMM d, h:mm a")}`;
 }
 
-function SessionDetailRow({
-  entry,
-  showUser,
-}: {
-  entry: SessionDetailEntry;
-  showUser: boolean;
-}) {
+function SessionDetailRow({ entry }: { entry: SessionDetailEntry }) {
+  const [showCode, setShowCode] = useState(false);
+  const hasCode = entry.lineContent != null && entry.lineContent !== "";
+  const colCount = 5;
   return (
-    <tr className="border-b border-border last:border-0">
-      {showUser && (
+    <>
+      <tr className="border-b border-border last:border-0">
         <td className="py-2 pl-4 pr-2 text-sm text-muted-foreground whitespace-nowrap">
           {entry.githubUsername ? (
             <span className="flex items-center gap-1">
@@ -47,21 +45,43 @@ function SessionDetailRow({
             "—"
           )}
         </td>
+        <td className="py-2 px-2 text-sm whitespace-nowrap">
+          {format(new Date(entry.timestamp), "MMM d, h:mm a")}
+        </td>
+        <td className="py-2 px-2 text-sm tabular-nums">
+          {entry.lineNumber != null ? entry.lineNumber : "—"}
+        </td>
+        <td className="py-2 px-2 text-sm text-muted-foreground max-w-[200px] truncate" title={entry.filePath ?? undefined}>
+          {entry.filePath ?? "—"}
+        </td>
+        <td className="py-2 pr-4 pl-2 text-right w-10">
+          {hasCode ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowCode((v) => !v);
+              }}
+              className="text-muted-foreground hover:text-foreground p-1 rounded"
+              aria-label={showCode ? "Hide code" : "Show code"}
+            >
+              {showCode ? <Minus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+            </button>
+          ) : (
+            <span className="text-muted-foreground/50">—</span>
+          )}
+        </td>
+      </tr>
+      {showCode && hasCode && (
+        <tr className="border-b border-border bg-muted/30">
+          <td colSpan={colCount} className="py-2 px-4">
+            <pre className="text-xs font-mono bg-muted/50 p-3 rounded overflow-x-auto whitespace-pre-wrap break-all">
+              {entry.lineContent}
+            </pre>
+          </td>
+        </tr>
       )}
-      <td className="py-2 px-2 text-sm whitespace-nowrap">
-        {format(new Date(entry.timestamp), "MMM d, h:mm a")}
-      </td>
-      <td className="py-2 px-2 text-sm tabular-nums">{entry.locChanged} LOC</td>
-      <td className="py-2 px-2">
-        {entry.aiUsed ? (
-          <Badge variant="secondary" className="text-xs gap-1 bg-amber-100 text-amber-800 border-0">
-            <Bot className="h-3 w-3" /> AI used
-          </Badge>
-        ) : (
-          <span className="text-xs text-muted-foreground">No AI</span>
-        )}
-      </td>
-    </tr>
+    </>
   );
 }
 
@@ -107,17 +127,16 @@ function SessionRow({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/50">
-                  {isGroup && (
-                    <th className="text-left py-2 pl-4 pr-2 font-medium text-muted-foreground">User</th>
-                  )}
+                  <th className="text-left py-2 pl-4 pr-2 font-medium text-muted-foreground">User</th>
                   <th className="text-left py-2 px-2 font-medium text-muted-foreground">Time</th>
-                  <th className="text-left py-2 px-2 font-medium text-muted-foreground">LOC</th>
-                  <th className="text-left py-2 px-2 font-medium text-muted-foreground">AI</th>
+                  <th className="text-left py-2 px-2 font-medium text-muted-foreground">Line #</th>
+                  <th className="text-left py-2 px-2 font-medium text-muted-foreground">File</th>
+                  <th className="text-right py-2 pr-4 pl-2 font-medium text-muted-foreground w-10" />
                 </tr>
               </thead>
               <tbody>
                 {session.details.map((entry, i) => (
-                  <SessionDetailRow key={i} entry={entry} showUser={isGroup} />
+                  <SessionDetailRow key={i} entry={entry} />
                 ))}
               </tbody>
             </table>
@@ -147,7 +166,11 @@ function SectionCard({
           ) : (
             <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
           )}
-          <span className="font-medium text-foreground">{section.label}</span>
+          <span className="font-medium text-foreground">
+            {section.members && section.members.length > 0
+              ? section.members.map((m) => `@${m}`).join(", ")
+              : section.label}
+          </span>
           {section.repoLink && (
             <a
               href={section.repoLink}
@@ -158,11 +181,6 @@ function SectionCard({
             >
               <Github className="h-4 w-4" /> Repo
             </a>
-          )}
-          {isGroup && section.members && section.members.length > 0 && (
-            <span className="text-xs text-muted-foreground">
-              @{section.members.join(", @")}
-            </span>
           )}
           <span className="text-sm text-muted-foreground ml-auto">
             {section.sessions.length} session{section.sessions.length !== 1 ? "s" : ""}
@@ -186,6 +204,10 @@ interface AssignmentProgressProps {
   /** Controlled search: when set from parent (e.g. after clicking a student in Invited), filters to that student's work. */
   search?: string;
   onSearchChange?: (value: string) => void;
+  /** Sections from progress API (null = not loaded yet). */
+  sections?: ProgressSection[] | null;
+  /** True while fetching progress. */
+  loading?: boolean;
 }
 
 export function AssignmentProgress({
@@ -193,41 +215,47 @@ export function AssignmentProgress({
   isGroup,
   search: searchProp,
   onSearchChange,
+  sections: sectionsProp = null,
+  loading = false,
 }: AssignmentProgressProps) {
   const [internalSearch, setInternalSearch] = useState("");
   const search = searchProp !== undefined ? searchProp : internalSearch;
   const setSearch = onSearchChange ?? setInternalSearch;
 
-  const allSections = mockProgressByAssignmentId[assignmentId] ?? mockProgressByAssignmentId["demo"];
+  const allSections = useMemo(
+    () => (sectionsProp ?? []).filter((s) => (s.sessions?.length ?? 0) > 0),
+    [sectionsProp],
+  );
   const sections = useMemo(() => {
-    if (!allSections) return [];
+    if (!allSections.length) return [];
     const q = search.trim().toLowerCase();
     if (!q) return allSections;
     return allSections.filter(
       (s) =>
         s.id.toLowerCase().includes(q) ||
         s.label.toLowerCase().includes(q) ||
-        s.members?.some((m) => m.toLowerCase().includes(q)),
+        s.members?.some((m) => (m || "").toLowerCase().includes(q)),
     );
   }, [allSections, search]);
 
-  if (!allSections || allSections.length === 0) {
+  if (loading && sectionsProp === null) {
     return (
-      <div>
-        <p className="text-sm text-muted-foreground rounded-xl border border-border bg-muted/20 px-4 py-6 text-center">
+      <div className="rounded-xl border border-border bg-white px-4 py-8 text-center">
+        <p className="text-sm text-muted-foreground">Loading progress…</p>
+      </div>
+    );
+  }
+  if (!allSections.length) {
+    return (
+      <div className="rounded-xl border border-border bg-muted/20 px-4 py-6 text-center">
+        <p className="text-sm text-muted-foreground">
           No progress data yet. Progress is tracked in real time; sessions and timeline will appear here.
         </p>
       </div>
     );
   }
-  const isDemo = !mockProgressByAssignmentId[assignmentId];
   return (
     <div className="rounded-xl border border-border bg-white overflow-hidden flex flex-col" style={{ maxHeight: "min(calc(100vh - 18rem), 520px)" }}>
-      {isDemo && (
-        <p className="text-sm text-amber-700 bg-amber-50 border-b border-amber-200 px-4 py-1.5">
-          Showing demo data (no progress recorded for this assignment yet).
-        </p>
-      )}
       <p className="text-sm text-muted-foreground px-4 pt-2 pb-1 shrink-0">
         Timeline of code changes by {isGroup ? "group" : "student"}. Expand sections for sessions, then sessions for timestamps and LOC.
       </p>
