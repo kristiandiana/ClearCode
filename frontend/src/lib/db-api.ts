@@ -135,6 +135,28 @@ export async function updateAssignment(
   return request<Assignment>("PATCH", `/assignments/${id}`, token, data);
 }
 
+export interface ProgressResponse {
+  sections: Array<{
+    id: string;
+    label: string;
+    repoLink?: string | null;
+    members?: string[] | null;
+    sessions: unknown[];
+  }>;
+}
+
+export async function fetchProgress(
+  token: string | null | undefined,
+  assignmentId: string,
+): Promise<ProgressResponse> {
+  if (!token) return { sections: [] };
+  return request<ProgressResponse>(
+    "GET",
+    `/assignments/${assignmentId}/progress`,
+    token,
+  );
+}
+
 export async function fetchInvitedStudents(
   token: string | null | undefined,
   assignmentId: string,
