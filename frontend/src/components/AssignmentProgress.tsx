@@ -10,6 +10,7 @@ import {
   Search,
   Plus,
   Minus,
+  FileText,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -18,7 +19,14 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
-import type { ProgressSection, Session, SessionDetailEntry } from "@/data/mockData";
+import type { ProgressSection, Session, SessionDetailEntry, SessionCitation } from "@/data/mockData";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 function formatTimeRange(start: string, end: string): string {
   const d = new Date(start);
@@ -85,6 +93,12 @@ function SessionDetailRow({ entry }: { entry: SessionDetailEntry }) {
   );
 }
 
+const CITATION_TYPE_ORDER: SessionCitation["type"][] = [
+  "agent prompt",
+  "external ai prompt",
+  "external source (manual)",
+];
+
 function SessionRow({
   session,
   isGroup,
@@ -93,6 +107,9 @@ function SessionRow({
   isGroup: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [citationsOpen, setCitationsOpen] = useState(false);
+  const hasCitations = (session.citations?.length ?? 0) > 0;
+
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <div className="rounded-lg border border-border bg-muted/30 overflow-hidden">
@@ -109,6 +126,57 @@ function SessionRow({
           <span className="text-sm text-muted-foreground tabular-nums shrink-0">
             {session.locChanged} LOC
           </span>
+          {hasCitations && (
+            <Dialog open={citationsOpen} onOpenChange={setCitationsOpen}>
+              <DialogTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => e.stopPropagation()}
+                  className="shrink-0 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <FileText className="h-3.5 w-3.5" /> Citations
+                </button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                <DialogHeader>
+                  <DialogTitle>Session citations</DialogTitle>
+                </DialogHeader>
+                <div className="overflow-y-auto space-y-4 pr-2">
+                  {CITATION_TYPE_ORDER.map((type) => {
+                    const list = (session.citations ?? []).filter((c) => c.type === type);
+                    if (list.length === 0) return null;
+                    return (
+                      <div key={type} className="space-y-2">
+                        <h4 className="text-sm font-medium text-muted-foreground capitalize">
+                          {type}
+                        </h4>
+                        <ul className="space-y-3">
+                          {list.map((c, i) => (
+                            <li key={i} className="rounded-md border border-border bg-muted/20 p-3 text-sm">
+                              <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                                <User className="h-3.5 w-3.5" />
+                                <span>@{c.githubUsername}</span>
+                                <span className="text-xs">
+                                  {format(new Date(c.timestamp), "MMM d, h:mm a")}
+                                </span>
+                              </div>
+                              {c.text ? (
+                                <pre className="text-xs font-mono whitespace-pre-wrap break-words mt-1">
+                                  {c.text}
+                                </pre>
+                              ) : (
+                                <span className="text-xs text-muted-foreground italic">No text</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
           {session.aiUsed ? (
             <Badge variant="secondary" className="text-xs gap-1 bg-amber-100 text-amber-800 border-0 shrink-0">
               <Bot className="h-3 w-3" /> AI

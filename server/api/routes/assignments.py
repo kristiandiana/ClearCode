@@ -37,6 +37,9 @@ def _doc_id_from_add_result(result):
 bp = Blueprint("assignments", __name__, url_prefix="")
 COLLECTION = "assignments"
 INVITES_COLLECTION = "assignmentInvites"
+CITATIONS_COLLECTION = "citations"
+
+CITATION_TYPES = {"agent prompt", "external ai prompt", "external source (manual)"}
 
 
 def _uid_from_request():
@@ -166,6 +169,56 @@ def push_line_event():
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/citations", methods=["POST"])
+def push_citation():
+    """
+    Store a citation from the extension. Body: assignmentId, githubUsername, type, timestamp (optional).
+    type must be one of: agent prompt, external ai prompt, external source (manual).
+    """
+    payload = request.get_json(silent=True)
+    if payload is None or not isinstance(payload, dict):
+        return jsonify({"error": "Expected JSON object"}), 400
+
+    assignment_id = (payload.get("assignmentId") or "").strip()
+    github_username = (payload.get("githubUsername") or "").strip().lower()
+    citation_type = (payload.get("type") or "").strip()
+    timestamp = payload.get("timestamp")
+
+    if not assignment_id:
+        return jsonify({"error": "assignmentId is required"}), 400
+    if not github_username:
+        return jsonify({"error": "githubUsername is required"}), 400
+    if citation_type not in CITATION_TYPES:
+        return jsonify({
+            "error": "type must be one of: agent prompt, external ai prompt, external source (manual)",
+            "received": citation_type or "(empty)",
+        }), 400
+
+    db = get_firestore()
+    if db is None:
+        return jsonify({"error": "Database not configured"}), 503
+
+    try:
+        if timestamp is None or timestamp == "":
+            timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        else:
+            timestamp = str(timestamp)
+
+        text = (payload.get("text") or payload.get("content") or "").strip() or None
+
+        doc_ref = db.collection(CITATIONS_COLLECTION).document()
+        doc_ref.set({
+            "assignmentId": assignment_id,
+            "githubUsername": github_username,
+            "type": citation_type,
+            "timestamp": timestamp,
+            "text": text,
+        })
+
+        return jsonify({"ok": True, "id": doc_ref.id}), 201
+    except Exception as e:
+        current_app.logger.exception("Push citation failed")
+        return jsonify({"error": str(e)}), 500
 
 
 
@@ -525,6 +578,40 @@ def get_progress_by_assignment_id(assignment_id):
                 "members": members,
                 "sessions": all_sessions,
             }]
+
+        # Fetch citations for this assignment and attach to sessions
+        try:
+            citation_docs = (
+                db.collection(CITATIONS_COLLECTION)
+                .where("assignmentId", "==", assignment_id)
+                .stream()
+            )
+            all_citations = [doc.to_dict() for doc in citation_docs]
+        except Exception:
+            all_citations = []
+
+        for section in sections:
+            allowed_users = {str(m).strip().lower() for m in (section.get("members") or []) if m}
+            for session in section.get("sessions", []):
+                start_t = session.get("startTime") or ""
+                end_t = session.get("endTime") or ""
+                session_citations = []
+                for c in all_citations:
+                    if c.get("assignmentId") != assignment_id:
+                        continue
+                    user = (c.get("githubUsername") or "").strip().lower()
+                    if user not in allowed_users:
+                        continue
+                    ts = c.get("timestamp") or ""
+                    if ts < start_t or ts > end_t:
+                        continue
+                    session_citations.append({
+                        "type": c.get("type", ""),
+                        "githubUsername": c.get("githubUsername", ""),
+                        "timestamp": ts,
+                        "text": c.get("text"),
+                    })
+                session["citations"] = session_citations
 
         return jsonify({"sections": sections}), 200
     except Exception as e:
