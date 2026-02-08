@@ -17,7 +17,6 @@ import {
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
 import type { ProgressSection, Session, SessionDetailEntry } from "@/data/mockData";
-import { mockProgressByAssignmentId } from "@/data/mockData";
 
 function formatTimeRange(start: string, end: string): string {
   const d = new Date(start);
@@ -186,6 +185,10 @@ interface AssignmentProgressProps {
   /** Controlled search: when set from parent (e.g. after clicking a student in Invited), filters to that student's work. */
   search?: string;
   onSearchChange?: (value: string) => void;
+  /** Sections from progress API (null = not loaded yet). */
+  sections?: ProgressSection[] | null;
+  /** True while fetching progress. */
+  loading?: boolean;
 }
 
 export function AssignmentProgress({
@@ -193,41 +196,44 @@ export function AssignmentProgress({
   isGroup,
   search: searchProp,
   onSearchChange,
+  sections: sectionsProp = null,
+  loading = false,
 }: AssignmentProgressProps) {
   const [internalSearch, setInternalSearch] = useState("");
   const search = searchProp !== undefined ? searchProp : internalSearch;
   const setSearch = onSearchChange ?? setInternalSearch;
 
-  const allSections = mockProgressByAssignmentId[assignmentId] ?? mockProgressByAssignmentId["demo"];
+  const allSections = sectionsProp ?? [];
   const sections = useMemo(() => {
-    if (!allSections) return [];
+    if (!allSections.length) return [];
     const q = search.trim().toLowerCase();
     if (!q) return allSections;
     return allSections.filter(
       (s) =>
         s.id.toLowerCase().includes(q) ||
         s.label.toLowerCase().includes(q) ||
-        s.members?.some((m) => m.toLowerCase().includes(q)),
+        s.members?.some((m) => (m || "").toLowerCase().includes(q)),
     );
   }, [allSections, search]);
 
-  if (!allSections || allSections.length === 0) {
+  if (loading && sectionsProp === null) {
     return (
-      <div>
-        <p className="text-sm text-muted-foreground rounded-xl border border-border bg-muted/20 px-4 py-6 text-center">
+      <div className="rounded-xl border border-border bg-white px-4 py-8 text-center">
+        <p className="text-sm text-muted-foreground">Loading progress…</p>
+      </div>
+    );
+  }
+  if (!allSections.length) {
+    return (
+      <div className="rounded-xl border border-border bg-muted/20 px-4 py-6 text-center">
+        <p className="text-sm text-muted-foreground">
           No progress data yet. Progress is tracked in real time; sessions and timeline will appear here.
         </p>
       </div>
     );
   }
-  const isDemo = !mockProgressByAssignmentId[assignmentId];
   return (
     <div className="rounded-xl border border-border bg-white overflow-hidden flex flex-col" style={{ maxHeight: "min(calc(100vh - 18rem), 520px)" }}>
-      {isDemo && (
-        <p className="text-sm text-amber-700 bg-amber-50 border-b border-amber-200 px-4 py-1.5">
-          Showing demo data (no progress recorded for this assignment yet).
-        </p>
-      )}
       <p className="text-sm text-muted-foreground px-4 pt-2 pb-1 shrink-0">
         Timeline of code changes by {isGroup ? "group" : "student"}. Expand sections for sessions, then sessions for timestamps and LOC.
       </p>

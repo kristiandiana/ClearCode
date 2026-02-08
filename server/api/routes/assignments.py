@@ -1,6 +1,6 @@
 """Assignments CRUD via Flask; data stored in Firestore."""
 from flask import Blueprint, current_app, jsonify, request
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from server.fb_admin import get_firestore, verify_id_token
 
@@ -296,11 +296,132 @@ def get_assignment(assignment_id):
 
 
 LINE_EVENTS_COLLECTION = "lineEvents"
+# Auto-close session if no new event for this many minutes (applies collectively to all members).
+SESSION_GAP_MINUTES = 10
+# Max session length in minutes; start a new session if adding this event would exceed it.
+SESSION_MAX_MINUTES = 15
+
+
+def _parse_iso(ts):
+    """Parse ISO timestamp string or Firestore datetime to datetime (timezone-aware if possible)."""
+    if ts is None:
+        return None
+    if hasattr(ts, "isoformat"):
+        return ts
+    s = (ts or "").strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        return datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _to_iso(ts):
+    """Convert datetime or ISO string to ISO string for JSON."""
+    if ts is None:
+        return None
+    if hasattr(ts, "isoformat"):
+        return ts.isoformat().replace("+00:00", "Z")
+    return ts if isinstance(ts, str) else None
+
+
+def _flush_session_batch(current_batch, sessions, session_id_prefix, session_counter):
+    """Append one session from current_batch; return new session_counter."""
+    if not current_batch:
+        return session_counter
+    session_counter += 1
+    sid = f"{session_id_prefix}s{session_counter}"
+    sessions.append({
+        "id": sid,
+        "startTime": _to_iso(current_batch[0][1].get("updatedAt")),
+        "endTime": _to_iso(current_batch[-1][1].get("updatedAt")),
+        "locChanged": len(current_batch),
+        "aiUsed": None,
+        "githubUsernames": list({x[1].get("githubUsername", "").strip().lower() for x in current_batch if (x[1].get("githubUsername") or "").strip()}),
+        "details": [x[2] for x in current_batch],
+    })
+    return session_counter
+
+
+def _events_to_sessions(events, session_id_prefix="s"):
+    """
+    Group events into sessions collectively (all members in one timeline).
+    - Auto-close session if no new event for SESSION_GAP_MINUTES (10 min).
+    - Max session length SESSION_MAX_MINUTES (15 min); start new session if exceeded.
+    Returns list of session dicts: id, startTime, endTime, locChanged, aiUsed, githubUsernames, details.
+    """
+    if not events:
+        return []
+    sorted_events = sorted(
+        events,
+        key=lambda e: (e.get("updatedAt") or ""),
+    )
+    sessions = []
+    current_batch = []
+    session_counter = 0
+    gap_delta = timedelta(minutes=SESSION_GAP_MINUTES)
+    max_span_delta = timedelta(minutes=SESSION_MAX_MINUTES)
+
+    for e in sorted_events:
+        ts = _parse_iso(e.get("updatedAt"))
+        if ts is None:
+            continue
+        user = (e.get("githubUsername") or "").strip().lower()
+        detail = {
+            "timestamp": _to_iso(e.get("updatedAt")),
+            "locChanged": 1,
+            "aiUsed": None,
+            "githubUsername": user or None,
+        }
+        if not current_batch:
+            current_batch.append((ts, e, detail))
+            continue
+        first_ts = current_batch[0][0]
+        last_ts = current_batch[-1][0]
+        gap_exceeded = (ts - last_ts) > gap_delta
+        max_span_exceeded = (ts - first_ts) > max_span_delta
+        if gap_exceeded or max_span_exceeded:
+            session_counter = _flush_session_batch(current_batch, sessions, session_id_prefix, session_counter)
+            current_batch = []
+        current_batch.append((ts, e, detail))
+
+    if current_batch:
+        session_counter = _flush_session_batch(current_batch, sessions, session_id_prefix, session_counter)
+    return sessions
+
+
+def _get_groups_for_assignment(db, assignment_id, uid):
+    """
+    Get groups for the assignment. Returns either:
+    - A dict { repo_url: [github_username, ...], ... } (from get_groups API),
+    - Or a list of group dicts/lists from the assignment doc (legacy).
+    """
+    ref = db.collection(COLLECTION).document(assignment_id).get()
+    if not ref.exists:
+        return None
+    d = ref.to_dict()
+    if d.get("userId") != uid:
+        return None
+    return d.get("groups")
+
+
+# Sample groups for testing when real groups not available: repo URL -> list of GitHub usernames.
+SAMPLE_GROUPS = {
+    "https://github.com/IainMac32/testrepoHackathon": ["iainmac32"],
+    "https://github.com/kristiandiana/demo-repo": ["kristiandiana"],
+}
 
 
 @bp.route("/<assignment_id>/progress", methods=["GET"])
 def get_progress_by_assignment_id(assignment_id):
-    """Fetch all lineEvents for the given assignment (stored in variable; returns empty JSON for now)."""
+    """
+    Fetch lineEvents for the assignment. Get groups (list of group dicts with id, name, members).
+    For each group, filter events to that group's members and build sessions (10 min gap, 15 min max).
+    Return sections: one per group with id, label, repoLink, members, sessions.
+    """
     uid, err = _uid_from_request()
     if err is not None:
         return err[0], err[1]
@@ -315,14 +436,90 @@ def get_progress_by_assignment_id(assignment_id):
         )
         line_events_data = [doc.to_dict() for doc in docs]
 
-        # get the groups
 
-        # form the sessions
+        
+        
+        groups = {}  # githubLink -> set(usernames)
 
-        # return output
+        print("DEBUG: total events =", len(line_events_data))
+        for i, event in enumerate(line_events_data):
+            username = (event.get("githubUsername") or "").strip().lower()
+            repo_link = (event.get("githubLink") or "").strip()
+            print(f"\nDEBUG: event {i}")
+            print("  username =", username)
+            print("  repo_link =", repo_link)
+            if not username or not repo_link:
+                print("  -> missing username or repo_link, skipping")
+                continue
+            if repo_link not in groups:
+                print("  -> creating new group for repo_link")
+                groups[repo_link] = set()
+            if username not in groups[repo_link]:
+                print("  -> adding user to group:", username)
+            groups[repo_link].add(username)
+        # convert sets -> lists (JSON-safe)
+        groups_json = {repo: sorted(list(users)) for repo, users in groups.items()}
+        print("\nDEBUG: FINAL groups =", groups_json)
 
-        print("line_events_data:", line_events_data)
-        return jsonify({}), 200
+
+        # convert groups_json back to groups
+        groups = {repo: set(users) for repo, users in groups_json.items()}
+
+        # groups: dict { repo_url: [github_id, ...] } or legacy list; fall back to sample for testing
+        raw_groups = groups if groups else SAMPLE_GROUPS
+
+        # Normalize to list of (repo_url, members) for uniform iteration
+        if isinstance(raw_groups, dict):
+            group_items = list(raw_groups.items())
+        else:
+            group_items = []
+            for g in raw_groups:
+                if isinstance(g, dict):
+                    group_items.append((g.get("repoLink") or g.get("repo_link"), g.get("members") or []))
+                elif isinstance(g, (list, tuple)):
+                    group_items.append((None, list(g)))
+                else:
+                    group_items.append((None, []))
+
+        sections = []
+        for i, (repo_url, members) in enumerate(group_items):
+            members = [m for m in (members or []) if m]
+            group_id = f"g{i + 1}"
+            group_label = repo_url or f"Group {i + 1}"
+            if repo_url and "/" in repo_url:
+                group_label = repo_url.rstrip("/").split("/")[-1]  # e.g. testrepoHackathon
+            allowed = {str(m).strip().lower() for m in members}
+            group_events = [e for e in line_events_data if (e.get("githubUsername") or "").strip().lower() in allowed]
+            sessions = _events_to_sessions(group_events, session_id_prefix=f"{group_id}-")
+            repo_link = repo_url
+            if not repo_link and group_events:
+                first_event = min(group_events, key=lambda e: (e.get("updatedAt") or ""))
+                repo_link = first_event.get("githubLink")
+            sections.append({
+                "id": group_id,
+                "label": group_label,
+                "repoLink": repo_link,
+                "members": members if len(members) > 1 else None,
+                "sessions": sessions,
+            })
+
+        if not sections:
+            # No groups: single section with all events (e.g. solo or no groups defined)
+            all_sessions = _events_to_sessions(line_events_data, session_id_prefix="s")
+            repo_link = None
+            if line_events_data:
+                first_event = min(line_events_data, key=lambda e: (e.get("updatedAt") or ""))
+                repo_link = first_event.get("githubLink")
+            members = list({(e.get("githubUsername") or "").strip().lower() for e in line_events_data if (e.get("githubUsername") or "").strip()})
+            sections = [{
+                "id": "progress",
+                "label": "Progress",
+                "repoLink": repo_link,
+                "members": members if len(members) > 1 else None,
+                "sessions": all_sessions,
+            }]
+
+        return jsonify({"sections": sections}), 200
     except Exception as e:
         current_app.logger.exception(e)
         return jsonify({"error": str(e)}), 500
